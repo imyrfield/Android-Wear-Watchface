@@ -34,14 +34,16 @@ import android.os.Message;
 import android.support.v7.graphics.Palette;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
+import android.text.format.DateFormat;
 import android.text.format.Time;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
 
 import java.lang.ref.WeakReference;
-import java.util.TimeZone;
-import java.util.concurrent.TimeUnit;
+import java.util.Calendar;
+import java.util.Date;
 
 /**
  * Digital watch face with seconds. In ambient mode, the seconds aren't displayed. On devices with
@@ -57,7 +59,7 @@ public class SunshineWatchFace
      * Update rate in milliseconds for interactive mode. We update once a second since seconds are
      * displayed in interactive mode.
      */
-    private static final long INTERACTIVE_UPDATE_RATE_MS = TimeUnit.SECONDS.toMillis( 1 );
+    private static final long INTERACTIVE_UPDATE_RATE_MS = 500;
 
     /**
      * Handler message id for updating the time periodically in interactive mode.
@@ -72,12 +74,25 @@ public class SunshineWatchFace
 
     private class Engine
             extends CanvasWatchFaceService.Engine {
+
         final Handler mUpdateTimeHandler = new EngineHandler( this );
+
+        static final String COLON_STRING = ":";
+
         boolean mRegisteredTimeZoneReceiver = false;
+        boolean mAmbient;
+        boolean mShouldDrawColons;
+
         Paint mBackgroundPaint;
         Paint mTextPaint;
-        boolean mAmbient;
+
+        String mAmString;
+        String mPmString;
+
+        Calendar mCalendar;
+        Date mDate;
         Time    mTime;
+        // TODO: ***FIX*** Timezones
         final BroadcastReceiver mTimeZoneReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive (Context context, Intent intent) {
@@ -85,8 +100,12 @@ public class SunshineWatchFace
                 mTime.setToNow();
             }
         };
+
         float mXOffset;
         float mYOffset;
+        float mColonWidth;
+
+
         private Bitmap mBackgroundBitmap;
         private int mPaletteLightColor;
         private int mPaletteDarkColor;
@@ -108,6 +127,10 @@ public class SunshineWatchFace
                                                                                            WatchFaceStyle.BACKGROUND_VISIBILITY_INTERRUPTIVE )
                                                                                    .setShowSystemUiTime(
                                                                                            false )
+                                                                                   .setStatusBarGravity(
+                                                                                           Gravity.RIGHT )
+                                                                                   .setHotwordIndicatorGravity( Gravity.BOTTOM )
+                                                                                   .setViewProtectionMode( WatchFaceStyle.PROTECT_STATUS_BAR | WatchFaceStyle.PROTECT_HOTWORD_INDICATOR )
                                                                                    .build() );
             Resources resources = SunshineWatchFace.this.getResources();
             mYOffset = resources.getDimension( R.dimen.digital_y_offset );
@@ -118,6 +141,7 @@ public class SunshineWatchFace
             mTextPaint = new Paint();
             mTextPaint = createTextPaint( resources.getColor( R.color.digital_text ) );
 
+            // TODO: ***FIX*** Generate Background based on Actual Weather
             mBackgroundBitmap = BitmapFactory.decodeResource( getResources(), R
                     .drawable.storm );
 
@@ -139,7 +163,9 @@ public class SunshineWatchFace
                         }
                     });
 
-            mTime = new Time();
+            mCalendar = Calendar.getInstance();
+            mDate = new Date(  );
+            // Todo: initFormats(); ?
         }
 
         @Override
@@ -164,8 +190,8 @@ public class SunshineWatchFace
                 registerReceiver();
 
                 // Update time zone in case it changed while we weren't visible.
-                mTime.clear( TimeZone.getDefault().getID() );
-                mTime.setToNow();
+//                mTime.clear( TimeZone.getDefault().getID() );
+//                mTime.setToNow();
             } else {
                 unregisterReceiver();
             }
@@ -203,6 +229,8 @@ public class SunshineWatchFace
             float textSize = resources.getDimension( isRound ? R.dimen.digital_text_size_round : R.dimen.digital_text_size );
 
             mTextPaint.setTextSize( textSize );
+
+            mColonWidth = mTextPaint.measureText( COLON_STRING );
         }
 
         @Override
@@ -240,18 +268,55 @@ public class SunshineWatchFace
                 canvas.drawColor( Color.BLACK );
                 mTextPaint.setColor( Color.WHITE );
             } else {
+                // TODO: ***IDEA*** Shift Background so 1/2 off screen ?
                 canvas.drawColor( mPaletteDarkColor );
                 canvas.drawBitmap(mBackgroundBitmap, 0, 0, null);
                 mTextPaint.setColor( mPaletteVibrantColor );
 
             }
 
-            //TODO: Make Colon Blink (see Sample Digital Watch)
+            long now = System.currentTimeMillis();
+            mCalendar.setTimeInMillis( now );
+            mDate.setTime( now );
+            boolean is24Hour = DateFormat.is24HourFormat( SunshineWatchFace.this );
 
-            // Draw H:MM in ambient mode or H:MM:SS in interactive mode.
-            mTime.setToNow();
-            String text = String.format( "%d:%02d", mTime.hour, mTime.minute );
-            canvas.drawText( text, mXOffset, mYOffset, mTextPaint );
+            // Shows colons for first 1/2 second
+            mShouldDrawColons = (System.currentTimeMillis() % 1000) < 500;
+
+            // Draw Hours
+            // TODO: ***FIX*** Center text properly
+            float x = mXOffset + 35;
+            String hourString;
+            if (is24Hour ){
+                hourString = formatTwoDigitNumber( mCalendar.get( Calendar.HOUR_OF_DAY
+                ) );
+            } else {
+                int hour = mCalendar.get( Calendar.HOUR_OF_DAY );
+                if(hour == 0) {
+                    hour = 12;
+                }
+                hourString = String.valueOf( hour );
+            }
+            canvas.drawText( hourString, x, mYOffset, mTextPaint);
+            x += mTextPaint.measureText( hourString );
+
+            // Draw Colons
+            if (isInAmbientMode() || mShouldDrawColons ){
+                canvas.drawText( COLON_STRING, x, mYOffset, mTextPaint);
+            }
+            x += mColonWidth;
+
+            // Draw Minutes
+            String minuteString = formatTwoDigitNumber( mCalendar.get( Calendar.MINUTE ));
+            canvas.drawText( minuteString, x, mYOffset, mTextPaint );
+            x += mTextPaint.measureText( minuteString );
+
+            // TODO: ***FEATURE***  AM/PM - Currently Crashes (why?)
+//            if (!is24Hour) {
+//                x += mColonWidth;
+//                canvas.drawText( getAmPmString( mCalendar.get( Calendar.AM_PM ) ), x,
+//                                 mYOffset, mTextPaint );
+//            }
         }
 
         /**
@@ -296,6 +361,15 @@ public class SunshineWatchFace
             }
             super.onSurfaceChanged(holder, format, width, height);
         }
+
+        private String formatTwoDigitNumber(int hour) {
+            return String.format("%02d", hour);
+        }
+
+        private String getAmPmString(int amPm) {
+            return amPm == Calendar.AM ? mAmString : mPmString;
+        }
+
     }
 
     private static class EngineHandler
