@@ -21,6 +21,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -29,9 +31,11 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
+import android.support.v7.graphics.Palette;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
 import android.text.format.Time;
+import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
 
@@ -47,6 +51,7 @@ public class SunshineWatchFace
         extends CanvasWatchFaceService {
     private static final Typeface NORMAL_TYPEFACE = Typeface.create( Typeface.SANS_SERIF,
                                                                      Typeface.NORMAL );
+    private static final String TAG = "SunshineWatchFace";
 
     /**
      * Update rate in milliseconds for interactive mode. We update once a second since seconds are
@@ -82,6 +87,10 @@ public class SunshineWatchFace
         };
         float mXOffset;
         float mYOffset;
+        private Bitmap mBackgroundBitmap;
+        private int mPaletteLightColor;
+        private int mPaletteDarkColor;
+        private int mPaletteVibrantColor;
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -108,6 +117,27 @@ public class SunshineWatchFace
 
             mTextPaint = new Paint();
             mTextPaint = createTextPaint( resources.getColor( R.color.digital_text ) );
+
+            mBackgroundBitmap = BitmapFactory.decodeResource( getResources(), R
+                    .drawable.storm );
+
+            /* Extract colors from background image to improve watchface style. */
+            Palette.generateAsync(
+                    mBackgroundBitmap,
+                    new Palette.PaletteAsyncListener() {
+                        @Override
+                        public void onGenerated(Palette palette) {
+                            if (palette != null) {
+                                if (Log.isLoggable( TAG, Log.DEBUG)) {
+                                    Log.d(TAG, "Palette: " + palette);
+                                }
+
+                                mPaletteVibrantColor = palette.getVibrantColor(Color.BLACK);
+                                mPaletteLightColor = palette.getLightVibrantColor(Color.BLACK);
+                                mPaletteDarkColor = palette.getDarkMutedColor(getResources().getColor( R.color.background ));
+                            }
+                        }
+                    });
 
             mTime = new Time();
         }
@@ -208,19 +238,19 @@ public class SunshineWatchFace
             // Draw the background.
             if (isInAmbientMode()) {
                 canvas.drawColor( Color.BLACK );
+                mTextPaint.setColor( Color.WHITE );
             } else {
-                canvas.drawRect( 0, 0, bounds.width(), bounds.height(), mBackgroundPaint );
+                canvas.drawColor( mPaletteDarkColor );
+                canvas.drawBitmap(mBackgroundBitmap, 0, 0, null);
+                mTextPaint.setColor( mPaletteVibrantColor );
+
             }
+
+            //TODO: Make Colon Blink (see Sample Digital Watch)
 
             // Draw H:MM in ambient mode or H:MM:SS in interactive mode.
             mTime.setToNow();
-            String text = mAmbient ? String.format( "%d:%02d",
-                                                    mTime.hour,
-                                                    mTime.minute ) : String.format(
-                    "%d:%02d:%02d",
-                    mTime.hour,
-                    mTime.minute,
-                    mTime.second );
+            String text = String.format( "%d:%02d", mTime.hour, mTime.minute );
             canvas.drawText( text, mXOffset, mYOffset, mTextPaint );
         }
 
@@ -253,6 +283,18 @@ public class SunshineWatchFace
                 long delayMs = INTERACTIVE_UPDATE_RATE_MS - ( timeMs % INTERACTIVE_UPDATE_RATE_MS );
                 mUpdateTimeHandler.sendEmptyMessageDelayed( MSG_UPDATE_TIME, delayMs );
             }
+        }
+
+        @Override
+        public void onSurfaceChanged(
+                SurfaceHolder holder, int format, int width, int height) {
+            if (mBackgroundBitmap == null
+                    || mBackgroundBitmap.getWidth() != width
+                    || mBackgroundBitmap.getHeight() != height) {
+                mBackgroundBitmap = Bitmap.createScaledBitmap(mBackgroundBitmap,
+                                                                    width, height, true /* filter */);
+            }
+            super.onSurfaceChanged(holder, format, width, height);
         }
     }
 
