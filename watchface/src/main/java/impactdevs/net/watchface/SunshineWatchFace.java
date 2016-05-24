@@ -31,26 +31,36 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.support.v7.graphics.Palette;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
 import android.text.format.DateFormat;
-import android.text.format.Time;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
 
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.wearable.DataApi;
+import com.google.android.gms.wearable.DataEvent;
+import com.google.android.gms.wearable.DataEventBuffer;
+import com.google.android.gms.wearable.DataMap;
+import com.google.android.gms.wearable.DataMapItem;
+import com.google.android.gms.wearable.Wearable;
+
 import java.lang.ref.WeakReference;
 import java.util.Calendar;
 import java.util.Date;
-
+import java.util.TimeZone;
+import java.util.concurrent.TimeUnit;
+//TODO: Fix package names
 /**
  * Digital watch face with seconds. In ambient mode, the seconds aren't displayed. On devices with
  * low-bit ambient mode, the text is drawn without anti-aliasing in ambient mode.
  */
 public class SunshineWatchFace
         extends CanvasWatchFaceService {
+
     private static final Typeface NORMAL_TYPEFACE = Typeface.create( Typeface.SANS_SERIF,
                                                                      Typeface.NORMAL );
     private static final String TAG = "SunshineWatchFace";
@@ -71,9 +81,8 @@ public class SunshineWatchFace
         return new Engine();
     }
 
-
     private class Engine
-            extends CanvasWatchFaceService.Engine {
+            extends CanvasWatchFaceService.Engine implements DataApi.DataListener{
 
         final Handler mUpdateTimeHandler = new EngineHandler( this );
 
@@ -83,21 +92,23 @@ public class SunshineWatchFace
         boolean mAmbient;
         boolean mShouldDrawColons;
 
-        Paint mBackgroundPaint;
+        int   mBackgroundColor;
         Paint mTextPaint;
-
-        String mAmString;
-        String mPmString;
+        Paint mTemperaturePaint;
 
         Calendar mCalendar;
         Date mDate;
-        Time    mTime;
-        // TODO: ***FIX*** Timezones
+
         final BroadcastReceiver mTimeZoneReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive (Context context, Intent intent) {
-                mTime.clear( intent.getStringExtra( "time-zone" ) );
-                mTime.setToNow();
+
+                if(intent.hasExtra( "time-zone" )){
+                    mCalendar.getTimeZone();
+                }
+                mCalendar.setTimeZone( TimeZone.getDefault());
+                //initFormats();
+                invalidate();
             }
         };
 
@@ -105,11 +116,16 @@ public class SunshineWatchFace
         float mYOffset;
         float mColonWidth;
 
+        private static final String WEATHER_DATA_PATH = "/weather_data";
+        private static final String HIGH_TEMP_KEY = "highTemp";
+        private static final String LOW_TEMP_KEY = "lowTemp";
+        private static final String WEATHER_ID_KEY = "weatherID";
+
+        private String hTemp;
+        private String lTemp;
+        private int weatherId = -1;
 
         private Bitmap mBackgroundBitmap;
-        private int mPaletteLightColor;
-        private int mPaletteDarkColor;
-        private int mPaletteVibrantColor;
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -117,68 +133,68 @@ public class SunshineWatchFace
          */
         boolean mLowBitAmbient;
 
+        Resources resources;
+
+        GoogleApiClient mGoogleApiClient = new GoogleApiClient.Builder( SunshineWatchFace.this )
+                .addApi( Wearable.API )
+                .build();
+
         @Override
         public void onCreate (SurfaceHolder holder) {
             super.onCreate( holder );
 
-            setWatchFaceStyle( new WatchFaceStyle.Builder( SunshineWatchFace.this ).setCardPeekMode(
-                    WatchFaceStyle.PEEK_MODE_VARIABLE )
-                                                                                   .setBackgroundVisibility(
-                                                                                           WatchFaceStyle.BACKGROUND_VISIBILITY_INTERRUPTIVE )
-                                                                                   .setShowSystemUiTime(
-                                                                                           false )
-                                                                                   .setStatusBarGravity(
-                                                                                           Gravity.RIGHT )
-                                                                                   .setHotwordIndicatorGravity( Gravity.BOTTOM )
-                                                                                   .setViewProtectionMode( WatchFaceStyle.PROTECT_STATUS_BAR | WatchFaceStyle.PROTECT_HOTWORD_INDICATOR )
-                                                                                   .build() );
-            Resources resources = SunshineWatchFace.this.getResources();
-            mYOffset = resources.getDimension( R.dimen.digital_y_offset );
+            setWatchFaceStyle(
+                    new WatchFaceStyle.Builder( SunshineWatchFace.this )
+                            .setCardPeekMode( WatchFaceStyle.PEEK_MODE_VARIABLE )
+                            .setBackgroundVisibility( WatchFaceStyle.BACKGROUND_VISIBILITY_INTERRUPTIVE )
+                            .setShowSystemUiTime( false )
+                            .setStatusBarGravity( Gravity.RIGHT )
+                            .setHotwordIndicatorGravity( Gravity.BOTTOM )
+                            .setViewProtectionMode( WatchFaceStyle.PROTECT_STATUS_BAR | WatchFaceStyle.PROTECT_HOTWORD_INDICATOR )
+                            .build() );
 
-            mBackgroundPaint = new Paint();
-            mBackgroundPaint.setColor( resources.getColor( R.color.background ) );
+            resources = SunshineWatchFace.this.getResources();
+
+            mBackgroundColor = resources.getColor( R.color.background ) ;
 
             mTextPaint = new Paint();
-            mTextPaint = createTextPaint( resources.getColor( R.color.digital_text ) );
+            mTextPaint = createTextPaint( R.color.digital_text, -1 );
 
-            // TODO: ***FIX*** Generate Background based on Actual Weather
-            mBackgroundBitmap = BitmapFactory.decodeResource( getResources(), R
-                    .drawable.storm );
-
-            /* Extract colors from background image to improve watchface style. */
-            Palette.generateAsync(
-                    mBackgroundBitmap,
-                    new Palette.PaletteAsyncListener() {
-                        @Override
-                        public void onGenerated(Palette palette) {
-                            if (palette != null) {
-                                if (Log.isLoggable( TAG, Log.DEBUG)) {
-                                    Log.d(TAG, "Palette: " + palette);
-                                }
-
-                                mPaletteVibrantColor = palette.getVibrantColor(Color.BLACK);
-                                mPaletteLightColor = palette.getLightVibrantColor(Color.BLACK);
-                                mPaletteDarkColor = palette.getDarkMutedColor(getResources().getColor( R.color.background ));
-                            }
-                        }
-                    });
+            mTemperaturePaint = new Paint();
+            mTemperaturePaint = createTextPaint( R.color.digital_text, 40 );
 
             mCalendar = Calendar.getInstance();
             mDate = new Date(  );
             // Todo: initFormats(); ?
+
+            mGoogleApiClient.connect();
+
+            // Test values
+            weatherId = 800;
+            hTemp = String.format(SunshineWatchFace.this.getString(R.string.format_temperature), 18f);
+            lTemp = String.format(SunshineWatchFace.this.getString(R.string.format_temperature), 18f);
+            getBitmap( weatherId );
         }
 
         @Override
         public void onDestroy () {
+
             mUpdateTimeHandler.removeMessages( MSG_UPDATE_TIME );
+            if (mGoogleApiClient != null) mGoogleApiClient.disconnect();
+
             super.onDestroy();
         }
 
-        private Paint createTextPaint (int textColor) {
+        private Paint createTextPaint (int textColor, float size) {
             Paint paint = new Paint();
             paint.setColor( textColor );
             paint.setTypeface( NORMAL_TYPEFACE );
             paint.setAntiAlias( true );
+
+            if (size > 0) {
+                paint.setTextSize( size );
+            }
+
             return paint;
         }
 
@@ -189,9 +205,6 @@ public class SunshineWatchFace
             if (visible) {
                 registerReceiver();
 
-                // Update time zone in case it changed while we weren't visible.
-//                mTime.clear( TimeZone.getDefault().getID() );
-//                mTime.setToNow();
             } else {
                 unregisterReceiver();
             }
@@ -263,31 +276,39 @@ public class SunshineWatchFace
 
         @Override
         public void onDraw (Canvas canvas, Rect bounds) {
+
+            //mYOffset = bounds.exactCenterY();
+
             // Draw the background.
             if (isInAmbientMode()) {
+                mTextPaint.setColor( getResources().getColor( R.color.ambient_text ));
+                mTemperaturePaint.setColor( getResources().getColor( R.color.ambient_text ) );
                 canvas.drawColor( Color.BLACK );
-                mTextPaint.setColor( Color.WHITE );
-            } else {
-                // TODO: ***IDEA*** Shift Background so 1/2 off screen ?
-                canvas.drawColor( mPaletteDarkColor );
-                canvas.drawBitmap(mBackgroundBitmap, 0, 0, null);
-                mTextPaint.setColor( mPaletteVibrantColor );
 
+            } else {
+                mTextPaint.setColor( getResources().getColor( R.color.digital_text ) );
+                mTemperaturePaint.setColor( getResources().getColor( R.color.digital_text ) );
+                canvas.drawColor( mBackgroundColor );
+
+                if(mBackgroundBitmap != null) {
+                    // Shifts Background 1/2 off screen
+                    canvas.drawBitmap( mBackgroundBitmap, -bounds.exactCenterX(), 0, null );
+                }
             }
 
             long now = System.currentTimeMillis();
             mCalendar.setTimeInMillis( now );
             mDate.setTime( now );
             boolean is24Hour = DateFormat.is24HourFormat( SunshineWatchFace.this );
+            Log.d( TAG, "is24hour: " + is24Hour );
 
             // Shows colons for first 1/2 second
             mShouldDrawColons = (System.currentTimeMillis() % 1000) < 500;
 
             // Draw Hours
-            // TODO: ***FIX*** Center text properly
-            float x = mXOffset + 35;
+            float x = bounds.exactCenterX() - mXOffset;
             String hourString;
-            if (is24Hour ){
+            if (is24Hour){
                 hourString = formatTwoDigitNumber( mCalendar.get( Calendar.HOUR_OF_DAY
                 ) );
             } else {
@@ -295,6 +316,7 @@ public class SunshineWatchFace
                 if(hour == 0) {
                     hour = 12;
                 }
+                //TODO: Showing 13 instead of 1PM
                 hourString = String.valueOf( hour );
             }
             canvas.drawText( hourString, x, mYOffset, mTextPaint);
@@ -309,14 +331,30 @@ public class SunshineWatchFace
             // Draw Minutes
             String minuteString = formatTwoDigitNumber( mCalendar.get( Calendar.MINUTE ));
             canvas.drawText( minuteString, x, mYOffset, mTextPaint );
-            x += mTextPaint.measureText( minuteString );
 
-            // TODO: ***FEATURE***  AM/PM - Currently Crashes (why?)
+            // AM / PM
+//            x += mTextPaint.measureText( minuteString );
 //            if (!is24Hour) {
 //                x += mColonWidth;
 //                canvas.drawText( getAmPmString( mCalendar.get( Calendar.AM_PM ) ), x,
-//                                 mYOffset, mTextPaint );
+//                                 mYOffset, mTemperaturePaint );
 //            }
+
+
+            //Reset xOffset
+            x = bounds.exactCenterX();
+
+            // Draw temperatures
+            if(!isInAmbientMode()) {
+                if (hTemp == null){
+                    hTemp = "na ";
+                }
+                if (lTemp == null) {
+                    lTemp = " na";
+                }
+                String temp = hTemp + "|" + lTemp;
+                canvas.drawText( temp, x, mYOffset + 50, mTemperaturePaint );
+            }
         }
 
         /**
@@ -356,9 +394,11 @@ public class SunshineWatchFace
             if (mBackgroundBitmap == null
                     || mBackgroundBitmap.getWidth() != width
                     || mBackgroundBitmap.getHeight() != height) {
+                if (mBackgroundBitmap == null) return;
                 mBackgroundBitmap = Bitmap.createScaledBitmap(mBackgroundBitmap,
                                                                     width, height, true /* filter */);
             }
+            mYOffset = height/2;
             super.onSurfaceChanged(holder, format, width, height);
         }
 
@@ -366,14 +406,75 @@ public class SunshineWatchFace
             return String.format("%02d", hour);
         }
 
-        private String getAmPmString(int amPm) {
-            return amPm == Calendar.AM ? mAmString : mPmString;
+//        private String getAmPmString(int amPm) {
+//            return amPm == Calendar.AM ? getResources().getString( R.string.am_string )
+//                    : getResources().getString(R.string.pm_string );
+//        }
+
+        /**
+         * Generates bitmap based on weatherId
+         */
+        private void getBitmap (int weatherId){
+
+            // Return if weatherId invalid
+            if (weatherId < 0) {return;}
+
+            mBackgroundBitmap = BitmapFactory.decodeResource( getResources(),
+                                                              Utility.getBackgroundForWeatherID( weatherId ));
+
         }
 
+        @Override
+        public void onDataChanged (DataEventBuffer dataEvents) {
+
+            if (Log.isLoggable( TAG, Log.DEBUG)) {
+                Log.d(TAG, "onDataChanged: " + dataEvents);
+            }
+
+            // Initialize Google Api Client
+            GoogleApiClient mGoogleApiClient = new GoogleApiClient.Builder( SunshineWatchFace.this )
+                    .addApi( Wearable.API )
+                    .build();
+
+            ConnectionResult result = mGoogleApiClient.blockingConnect( 30, TimeUnit
+                    .SECONDS );
+
+            // If connection unsuccessful break!
+            if(!result.isSuccess()){
+                Log.e(TAG, "Failed to connect to GoogleApiClient.");
+                return;
+            }
+
+            for(DataEvent event : dataEvents){
+                // DataItem changed
+                if (event.getType() == DataEvent.TYPE_CHANGED) {
+                    DataMap map = DataMapItem.fromDataItem( event.getDataItem() )
+                                             .getDataMap();
+                    if (event.getDataItem().getUri().getPath().equals( WEATHER_DATA_PATH )) {
+
+                        if(map.containsKey( HIGH_TEMP_KEY )){
+                            hTemp = map.getString( HIGH_TEMP_KEY );
+                        } else { Log.d( TAG, "no high temp found" );}
+
+                        if(map.containsKey( LOW_TEMP_KEY )){
+                            lTemp = map.getString( LOW_TEMP_KEY );
+                        } else { Log.d( TAG, "no low temp found" ); }
+
+                        if(map.containsKey( WEATHER_ID_KEY )){
+                            weatherId = map.getInt( WEATHER_ID_KEY );
+                        } else { Log.d( TAG, "no weather id found" ); }
+                    }
+                }
+            }
+
+            getBitmap( weatherId );
+            invalidate();
+        }
     }
 
     private static class EngineHandler
             extends Handler {
+
         private final WeakReference<SunshineWatchFace.Engine> mWeakReference;
 
         public EngineHandler (SunshineWatchFace.Engine reference) {
