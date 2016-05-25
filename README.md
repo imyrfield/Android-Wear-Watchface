@@ -9,6 +9,12 @@ Getting Started
 This sample uses the Gradle build system.  To build this project, use the
 "gradlew build" command or use "Import Project" in Android Studio.
 
+Screenshots
+--------------
+<img src="screenshots/watchface_preview_round.png" width="340">
+<img src="screenshots/watchface_preview_square.png" width="340">
+
+
 License
 -------
 Copyright 2015 The Android Open Source Project, Inc.
