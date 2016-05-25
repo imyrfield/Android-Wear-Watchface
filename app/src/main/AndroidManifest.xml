@@ -125,6 +125,8 @@
                 android:name="color"
                 android:value="@color/primary" />
         </service>
+        <!--WatchFace sync service-->
+        <service android:name=".sync.WatchFaceListenerService" />
         <!-- Today Widget -->
         <receiver
             android:name=".widget.TodayWidgetProvider"

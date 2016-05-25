@@ -1,4 +1,4 @@
-package impactdevs.net.watchface;
+package com.example.android.sunshine.app;
 
 /**
  * Created by Ian on 5/16/2016.

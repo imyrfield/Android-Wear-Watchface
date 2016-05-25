@@ -95,6 +95,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
     public static final int LOCATION_STATUS_UNKNOWN = 3;
     public static final int LOCATION_STATUS_INVALID = 4;
 
+    // Wearable API keys
     private static GoogleApiClient mApiClient;
     private static final String WEATHER_DATA_PATH = "/weather_data";
     private static final String HIGH_TEMP_KEY = "highTemp";
